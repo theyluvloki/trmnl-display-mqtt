@@ -145,7 +145,7 @@ func main() {
 
 		filename := terminal.Filename
 		if filename == "" {
-			filename = "display.jpg"
+			filename = "display.png"
 		}
 		filePath := filepath.Join(tmpDir, filename)
 
