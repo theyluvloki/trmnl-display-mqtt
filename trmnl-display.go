@@ -27,7 +27,7 @@ var (
 
 // TerminalResponse represents the JSON structure expected from your MQTT message payload
 type TerminalResponse struct {
-	ImageURL    string `json:"image_url"`
+	ImageURL    string `json:"url"`
 	Filename    string `json:"filename"`
 	RefreshRate int    `json:"refresh_rate"`
 }
