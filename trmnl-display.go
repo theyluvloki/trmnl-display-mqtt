@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -13,130 +14,97 @@ import (
 	"strings"
 	"syscall"
 	"time"
-	"bufio"
+
+	mqtt "github.com/eclipse/paho.mqtt.golang"
 )
 
 // Version information
 var (
-	version   = "0.1.1"
+	version   = "0.2.1-mqtt"
 	commit    = "unknown"
 	buildDate = "unknown"
 )
 
-// TerminalResponse represents the JSON structure returned by the API
+// TerminalResponse represents the JSON structure expected from your MQTT message payload
 type TerminalResponse struct {
 	ImageURL    string `json:"image_url"`
 	Filename    string `json:"filename"`
 	RefreshRate int    `json:"refresh_rate"`
 }
 
-// Config holds application configuration
+// Config holds application configuration including MQTT broker details and credentials
 type Config struct {
-	APIKey   string `json:"api_key,omitempty"`   // API key for trmnl.app
-	DeviceID string `json:"device_id,omitempty"` // Device ID (MAC address) for Terminus/BYOS servers
-	BaseURL  string `json:"base_url,omitempty"`
+	BrokerURL string `json:"broker_url,omitempty"` // e.g., "tcp://192.168.1.50:1883"
+	Topic     string `json:"topic,omitempty"`      // e.g., "trmnl/display"
+	Username  string `json:"username,omitempty"`   // MQTT Username
+	Password  string `json:"password,omitempty"`   // MQTT Password
+	DeviceID  string `json:"device_id,omitempty"`
 }
 
 // AppOptions holds command line options
 type AppOptions struct {
 	DarkMode bool
 	Verbose  bool
-	BaseURL  string
 }
 
-//  exec.Command("sudo", "service", "gpm", "stop").Run()
-
 func main() {
-	// Parse command line arguments
 	options := parseCommandLineArgs()
-
-	// Set up signal handling for clean exit
 	setupSignalHandling()
 
-	// Check the environment first
 	if options.Verbose {
-		fmt.Println("Checking system environment...")
+		fmt.Println("Starting TRMNL MQTT client...")
 		if options.DarkMode {
 			fmt.Println("Dark mode enabled - images will be inverted")
 		}
 	}
 
-	var err error
-
-	// Create a configuration directory as per XDG standard:
-	// at user-specified location when the environment variable is set,
-	// at $HOME/.config/trmnl (XDG default config location for Unix) if not set
+	// XDG Config Directory setup
 	configHome := os.Getenv("XDG_CONFIG_HOME")
 	if configHome == "" {
 		homeDir, err := os.UserHomeDir()
-        	if err != nil {
+		if err != nil {
 			fmt.Printf("Error getting home directory: %v\n", err)
 			os.Exit(1)
 		}
-        	configHome = filepath.Join(homeDir, ".config")
-    	}
+		configHome = filepath.Join(homeDir, ".config")
+	}
 	configDir := filepath.Join(configHome, "trmnl")
-	err = os.MkdirAll(configDir, 0755)
+	err := os.MkdirAll(configDir, 0755)
 	if err != nil {
 		fmt.Printf("Error creating config directory: %v\n", err)
 		os.Exit(1)
 	}
 
-	// Get configuration from file
+	// Load configuration
 	config := loadConfig(configDir)
 
-	// Override with environment variables if present
-	if envAPIKey := os.Getenv("TRMNL_API_KEY"); envAPIKey != "" {
-		config.APIKey = envAPIKey
-	}
-	if envDeviceID := os.Getenv("TRMNL_DEVICE_ID"); envDeviceID != "" {
-		config.DeviceID = envDeviceID
-	}
-	if envBaseURL := os.Getenv("TRMNL_BASE_URL"); envBaseURL != "" {
-		config.BaseURL = envBaseURL
-	}
+	// Set defaults if missing and prompt user if broker is unconfigured
+	if config.BrokerURL == "" {
+		reader := bufio.NewReader(os.Stdin)
 
-	// Override with command line argument if provided
-	if options.BaseURL != "" {
-		config.BaseURL = options.BaseURL
-	}
+		fmt.Println("MQTT Broker URL not found.")
+		fmt.Print("Enter broker URL (e.g., tcp://192.168.1.50:1883): ")
+		config.BrokerURL, _ = reader.ReadString('\n')
+		config.BrokerURL = strings.TrimSpace(config.BrokerURL)
 
-	// Set default base URL if not configured
-	if config.BaseURL == "" {
-		config.BaseURL = "https://trmnl.app"
+		fmt.Print("Enter MQTT Username (leave blank if none): ")
+		config.Username, _ = reader.ReadString('\n')
+		config.Username = strings.TrimSpace(config.Username)
+
+		fmt.Print("Enter MQTT Password (leave blank if none): ")
+		config.Password, _ = reader.ReadString('\n')
+		config.Password = strings.TrimSpace(config.Password)
+
+		saveConfig(configDir, config)
+	}
+	if config.Topic == "" {
+		config.Topic = "trmnl/display"
+		saveConfig(configDir, config)
 	}
 
 	if options.Verbose {
-		fmt.Printf("Using base URL: %s\n", config.BaseURL)
-	}
-
-	// Check if we're using trmnl.app or a custom server
-	isTerminusServer := !strings.Contains(config.BaseURL, "trmnl.app")
-
-	// Ensure we have the appropriate credentials
-	if isTerminusServer {
-		// For Terminus/BYOS servers, we need a device ID (MAC address)
-		if config.DeviceID == "" {
-			// Check if API key looks like a MAC address and migrate it
-			if config.APIKey != "" && strings.Count(config.APIKey, ":") == 5 {
-				config.DeviceID = config.APIKey
-				config.APIKey = "" // Clear API key since it's actually a device ID
-			} else {
-				fmt.Println("Device ID (MAC address) not found.")
-				fmt.Print("Please enter your device MAC address (e.g., AA:BB:CC:DD:EE:FF): ")
-				fmt.Scanln(&config.DeviceID)
-			}
-			saveConfig(configDir, config)
-		}
-	} else {
-		// For trmnl.app, we need an API key
-		if config.APIKey == "" {
-			fmt.Println("TRMNL (device) API Key not found.")
-                        fmt.Println("(in the Device Credentials section of the web portal)")
-			fmt.Print("Please enter your key: ")
-			fmt.Scanln(&config.APIKey)
-			saveConfig(configDir, config)
-		}
+		fmt.Printf("Connecting to MQTT Broker: %s\n", config.BrokerURL)
+		fmt.Printf("Listening on Topic: %s\n", config.Topic)
 	}
 
 	// Create a temporary directory for storing images
@@ -146,14 +114,97 @@ func main() {
 		os.Exit(1)
 	}
 	defer os.RemoveAll(tmpDir)
+
 	frames := 0
-	for {
-		processNextImage(tmpDir, config, options, frames)
-		frames = frames + 1
+
+	// Configure MQTT Client Options
+	opts := mqtt.NewClientOptions()
+	opts.AddBroker(config.BrokerURL)
+	opts.SetClientID(fmt.Sprintf("trmnl-display-%d", time.Now().UnixNano()))
+	opts.SetOrderMatters(false)
+
+	// Set credentials if provided
+	if config.Username != "" {
+		opts.SetUsername(config.Username)
 	}
+	if config.Password != "" {
+		opts.SetPassword(config.Password)
+	}
+
+	// Define message handler callback when an MQTT update comes in
+	opts.SetDefaultPublishHandler(func(client mqtt.Client, msg mqtt.Message) {
+		if options.Verbose {
+			fmt.Printf("Received message on topic [%s]\n", msg.Topic())
+		}
+
+		var terminal TerminalResponse
+		if err := json.Unmarshal(msg.Payload(), &terminal); err != nil {
+			fmt.Printf("Error parsing MQTT JSON payload: %v\n", err)
+			return
+		}
+
+		filename := terminal.Filename
+		if filename == "" {
+			filename = "display.jpg"
+		}
+		filePath := filepath.Join(tmpDir, filename)
+
+		// Download the image specified in the payload
+		if err := downloadImage(terminal.ImageURL, filePath); err != nil {
+			fmt.Printf("Error downloading image: %v\n", err)
+			return
+		}
+
+		// Render image to e-paper screen
+		if err := displayImage(filePath, options, frames); err != nil {
+			fmt.Printf("Error displaying image: %v\n", err)
+			return
+		}
+
+		frames++
+	})
+
+	client := mqtt.NewClient(opts)
+	if token := client.Connect(); token.Wait() && token.Error() != nil {
+		fmt.Printf("Failed to connect to MQTT broker: %v\n", token.Error())
+		os.Exit(1)
+	}
+
+	// Subscribe to the designated topic
+	if token := client.Subscribe(config.Topic, 0, nil); token.Wait() && token.Error() != nil {
+		fmt.Printf("Failed to subscribe to topic: %v\n", token.Error())
+		os.Exit(1)
+	}
+
+	fmt.Println("Connected and waiting for MQTT messages. Press Ctrl+C to exit.")
+
+	// Block forever to keep the background MQTT listener running
+	select {}
 }
 
-// setupSignalHandling sets up handlers for SIGINT, SIGTERM, and SIGHUP
+// downloadImage handles pulling the image from the URL provided via MQTT
+func downloadImage(url, destPath string) error {
+	resp, err := http.Get(url)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("bad status code: %d", resp.StatusCode)
+	}
+
+	out, err := os.Create(destPath)
+	if err != nil {
+		return err
+	}
+	defer out.Close()
+
+	_, err = io.Copy(out, resp.Body)
+	return err
+}
+
+// setupSignalHandling handles graceful exits on interruption
 func setupSignalHandling() {
 	c := make(chan os.Signal, 1)
 	signal.Notify(c, os.Interrupt, syscall.SIGTERM, syscall.SIGHUP)
@@ -164,198 +215,56 @@ func setupSignalHandling() {
 	}()
 }
 
-// parseCommandLineArgs parses command line arguments and returns app options
+// parseCommandLineArgs parses command line switches
 func parseCommandLineArgs() AppOptions {
 	darkMode := flag.Bool("d", false, "Enable dark mode (invert image pixels)")
 	showVersion := flag.Bool("v", false, "Show version information")
 	verbose := flag.Bool("verbose", true, "Enable verbose output")
 	quiet := flag.Bool("q", false, "Quiet mode (disable verbose output)")
-	baseURL := flag.String("base-url", "", "Custom base URL for the TRMNL API (default: https://trmnl.app)")
 	flag.Parse()
 
 	if *showVersion {
-		fmt.Printf("trmnl-display version %s (commit: %s, built: %s)\n",
-			version, commit, buildDate)
+		fmt.Printf("trmnl-display mqtt version %s (commit: %s, built: %s)\n", version, commit, buildDate)
 		os.Exit(0)
 	}
 
 	return AppOptions{
 		DarkMode: *darkMode,
 		Verbose:  *verbose && !*quiet,
-		BaseURL:  *baseURL,
 	}
 }
 
-func processNextImage(tmpDir string, config Config, options AppOptions, frames int) {
-	// Use defer and recover to handle any panics
-	defer func() {
-		if r := recover(); r != nil {
-			fmt.Printf("Recovered from panic: %v\n", r)
-			time.Sleep(60 * time.Second)
-		}
-	}()
-
-	// Get the TRMNL display
-	apiURL := strings.TrimRight(config.BaseURL, "/") + "/api/display"
-	req, err := http.NewRequest("GET", apiURL, nil)
-	if err != nil {
-		fmt.Printf("Error creating request: %v\n", err)
-		time.Sleep(60 * time.Second)
-		return
-	}
-
-	// Use different header based on server type
-	// For Terminus servers, use MAC address in ID header
-	// For standard TRMNL servers, use access-token
-	if strings.Contains(config.BaseURL, "trmnl.app") {
-		req.Header.Add("access-token", config.APIKey)
-	} else {
-		// For Terminus/BYOS servers, use ID header with MAC address
-		req.Header.Add("ID", config.DeviceID)
-		// Also add access-token for BYOS Laravel compatibility
-		if config.APIKey != "" {
-			req.Header.Add("access-token", config.APIKey)
-		}
-		req.Header.Add("Content-Type", "application/json")
-	}
-	req.Header.Add("battery-voltage", "100.00")
-	req.Header.Add("rssi", "0")
-	req.Header.Add("User-Agent", fmt.Sprintf("trmnl-display/%s", version))
-	client := &http.Client{
-		Timeout: 30 * time.Second,
-	}
-	resp, err := client.Do(req)
-	if err != nil {
-		fmt.Printf("Error fetching display: %v\n", err)
-		time.Sleep(60 * time.Second)
-		return
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != 200 {
-		fmt.Printf("Error fetching display from %s: status code %d\n", apiURL, resp.StatusCode)
-		if options.Verbose && resp.StatusCode == 404 {
-			fmt.Printf("API endpoint not found. Please verify the base URL is correct.\n")
-		}
-		time.Sleep(60 * time.Second)
-		return
-	}
-
-	// Parse the JSON response
-	var terminal TerminalResponse
-	decoder := json.NewDecoder(resp.Body)
-	if err := decoder.Decode(&terminal); err != nil {
-		fmt.Printf("Error parsing JSON: %v\n", err)
-		time.Sleep(60 * time.Second)
-		return
-	}
-
-	// Set default filename if not provided
-	filename := terminal.Filename
-	if filename == "" {
-		filename = "display.jpg"
-	}
-
-	// Create full path to temporary file
-	filePath := filepath.Join(tmpDir, filename)
-
-	// Download the image
-	imgResp, err := http.Get(terminal.ImageURL)
-	if err != nil {
-		fmt.Printf("Error downloading image: %v\n", err)
-		time.Sleep(60 * time.Second)
-		return
-	}
-	defer imgResp.Body.Close()
-
-	// Create the file
-	out, err := os.Create(filePath)
-	if err != nil {
-		fmt.Printf("Error creating file: %v\n", err)
-		time.Sleep(60 * time.Second)
-		return
-	}
-
-	// Copy the image data to the file
-	_, err = io.Copy(out, imgResp.Body)
-	if err != nil {
-		fmt.Printf("Error saving image: %v\n", err)
-		out.Close()
-		time.Sleep(60 * time.Second)
-		return
-	}
-	out.Close()
-
-	// Display the image
-	err = displayImage(filePath, options, frames)
-	if err != nil {
-		fmt.Printf("Error displaying image: %v\n", err)
-		time.Sleep(60 * time.Second)
-		return
-	}
-
-	// Set default refresh rate if not provided
-	refreshRate := terminal.RefreshRate
-	if refreshRate <= 0 {
-		refreshRate = 60
-	}
-
-	done := 0
-
-	go func() {
-		scanner := bufio.NewScanner(os.Stdin)
-		for scanner.Scan() {
-			fmt.Println("Keypress...skipping to next update")
-			done = 1
-			break
-		}
-	}()
-
-	out:
-	// Sleep for the refresh rate
-	for i := 0; i < refreshRate; i++ {
-	    time.Sleep(time.Second) // sleep one second at a time
-	    if done == 1 {
-	        break out
-	    }
-	}
-}
-
+// displayImage triggers the external show_img binary
 func displayImage(imagePath string, options AppOptions, frames int) error {
-//
-// N.B (Larry Bank)
-// This update can use one of 3 temperature/panel profiles
-// and the 3 update modes for 1-bit content
-// Please consider if this should have a counter and mimic the TRMNL-OG behavior
-//
-        var sb strings.Builder
-        var sb2 strings.Builder
-        var sb3 strings.Builder
+	var sb strings.Builder
+	var sb2 strings.Builder
+	var sb3 strings.Builder
 
-        sb.WriteString("file=")
-        sb.WriteString(imagePath)
+	sb.WriteString("file=")
+	sb.WriteString(imagePath)
 
-        sb2.WriteString("invert=")
-        if options.DarkMode {
-              sb2.WriteString("true")
-        } else {
-              sb2.WriteString("false")
-        }
+	sb2.WriteString("invert=")
+	if options.DarkMode {
+		sb2.WriteString("true")
+	} else {
+		sb2.WriteString("false")
+	}
 
-        sb3.WriteString("mode=")
-        if (frames & 3) == 0 { // use fast mode every 4 updates to clear any ghosting
-              sb3.WriteString("fast")
-        } else {
-              sb3.WriteString("partial") // partial = no flicker/flash
-        }
-        err := exec.Command("show_img", sb.String(), sb2.String(), sb3.String()).Run()
-        if err != nil {
-		fmt.Println("show_img tool missing; build it and try again; error = %v", err)
-		os.Exit(0);
-        }
+	sb3.WriteString("mode=")
+	if (frames & 3) == 0 { // Full refresh every 4 updates to clear ghosting
+		sb3.WriteString("fast")
+	} else {
+		sb3.WriteString("partial") // Smooth refresh with no flicker
+	}
+
+	err := exec.Command("show_img", sb.String(), sb2.String(), sb3.String()).Run()
+	if err != nil {
+		fmt.Printf("show_img tool missing or failed; error = %v\n", err)
+		os.Exit(0)
+	}
+
 	if options.Verbose {
-		fmt.Printf("Displayed: %s\n", imagePath)
-		fmt.Println("EPD update completed")
+		fmt.Printf("Displayed: %s (Frame %d)\n", imagePath, frames)
 	}
 	return nil
 }
@@ -381,8 +290,5 @@ func saveConfig(configDir string, config Config) {
 		return
 	}
 
-	err = os.WriteFile(configFile, data, 0600)
-	if err != nil {
-		fmt.Printf("Error writing config file: %v\n", err)
-	}
+	_ = os.WriteFile(configFile, data, 0600)
 }
