@@ -274,7 +274,7 @@ func displayImage(imagePath string, options AppOptions, frames int) error {
                 args := []string{
                         "-y",
                         "-i", imagePath,
-                        "-vf", "scale=900:1600:force_original_aspect_ratio=decrease,pad=1600:900:(ow-iw)/2:(oh-ih)/2",
+                        "-vf", "scale=1600:900:force_original_aspect_ratio=decrease,pad=1600:900:(ow-iw)/2:(oh-ih)/2",
                         "-pix_fmt", "rgb565le",
                         "-f", "fbdev",
                         "/dev/fb0",
