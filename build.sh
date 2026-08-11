@@ -5,7 +5,7 @@ set -e
 # save the current directory
   pushd .
 # Install the required components
-  sudo apt install git gpiod libgpiod-dev golang-go -y
+  sudo apt install git gpiod libgpiod-dev golang-go fbi -y
 
 # clone and build the epaper and image file support
   mkdir -p $HOME/Projects
