@@ -1,8 +1,12 @@
 -modifications-
+
 instead of polling, modified for mqtt support for quick updates
+
 support for hdmi displays (pick hdmi in cli config when it asks)
 
+
 main dependancy is ffmpeg (recomended) with a fallback for fbi (rendering png to display)
+
 you need to edit the go file and change to the resolution of your display
 
 
