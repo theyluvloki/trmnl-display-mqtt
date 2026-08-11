@@ -51,10 +51,25 @@ type AppOptions struct {
 	DarkMode bool
 	Verbose  bool
 }
-
 func main() {
 	options := parseCommandLineArgs()
 	setupSignalHandling()
+
+	// Completely hide the console block cursor while the app is running
+	if f, err := os.OpenFile("/dev/tty1", os.O_WRONLY, 0644); err == nil {
+		f.WriteString("\033[?25l")
+		f.Close()
+	}
+	_ = exec.Command("setterm", "--cursor", "off").Run()
+
+	// Ensure the cursor restores automatically if the app shuts down
+	defer func() {
+		if f, err := os.OpenFile("/dev/tty1", os.O_WRONLY, 0644); err == nil {
+			f.WriteString("\033[?25h")
+			f.Close()
+		}
+		_ = exec.Command("setterm", "--cursor", "on").Run()
+	}()
 
 	if options.Verbose {
 		fmt.Println("Starting TRMNL MQTT client...")
@@ -63,7 +78,7 @@ func main() {
 		}
 	}
 
-	// XDG Config Directory setup
+        // XDG Config Directory setup
 	configHome := os.Getenv("XDG_CONFIG_HOME")
 	if configHome == "" {
 		homeDir, err := os.UserHomeDir()
