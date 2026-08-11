@@ -1,3 +1,12 @@
+-modifications-
+instead of polling, modified for mqtt support for quick updates
+support for hdmi displays (pick hdmi in cli config when it asks)
+
+main dependancy is ffmpeg (recomended) with a fallback for fbi (rendering png to display)
+you need to edit the go file and change to the resolution of your display
+
+
+
 # TRMNL Display
 
 TRMNL Display is a lightweight, Linux command line application designed to display dynamic images directly on both framebuffer (LCD/HDMI) and SPI e-paper displays like the one in the TRMNL OG. It fetches images from the TRMNL API (or [your own self-hosted server](https://docs.usetrmnl.com/go/diy/byos)) and renders them directly to either a framebuffer or e-paper, providing a seamless display experience without requiring a traditional desktop environment.
