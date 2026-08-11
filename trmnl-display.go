@@ -254,7 +254,7 @@ func getShowImgConfigPath() string {
 	return "/root/.config/trmnl/show_img.json"
 }
 
-// displayImage conditionally renders using fbi (for framebuffer) or show_img (for e-paper)
+// displayImage conditionally renders using ffmpeg (for HDMI framebuffer) or show_img (for e-paper)
 func displayImage(imagePath string, options AppOptions, frames int) error {
 	adapter := "show_img" // default fallback
 
@@ -268,22 +268,31 @@ func displayImage(imagePath string, options AppOptions, frames int) error {
 	}
 
 	if adapter == "framebuffer" {
-		// Use fbi for raw HDMI/LCD framebuffer rendering
+		// Use ffmpeg for smooth, flicker-free HDMI/LCD framebuffer updates in-place
 		args := []string{
-			"-d", "/dev/fb0",
-			"-T", "1",
-			"-noverbose",
-			"-once",
-			"-a",
-			imagePath,
+			"-y",
+			"-i", imagePath,
+			"-f", "fbdev",
+			"/dev/fb0",
 		}
 
-		cmd := exec.Command("fbi", args...)
+		cmd := exec.Command("ffmpeg", args...)
 		if err := cmd.Run(); err != nil {
-			return fmt.Errorf("fbi execution failed: %v", err)
+			// Fallback to fbi if ffmpeg is missing
+			fallbackArgs := []string{
+				"-d", "/dev/fb0",
+				"-T", "1",
+				"-noverbose",
+				"-once",
+				"-a",
+				imagePath,
+			}
+			if fbErr := exec.Command("fbi", fallbackArgs...).Run(); fbErr != nil {
+				return fmt.Errorf("framebuffer rendering failed: %v", err)
+			}
 		}
 	} else {
-		// Use original show_img binary for e-paper displays
+		// Use original show_img binary for e-paper displays, retaining the refresh logic
 		var sb strings.Builder
 		var sb2 strings.Builder
 		var sb3 strings.Builder
@@ -299,10 +308,10 @@ func displayImage(imagePath string, options AppOptions, frames int) error {
 		}
 
 		sb3.WriteString("mode=")
-		if (frames & 3) == 0 { // Full refresh every 4 updates to clear ghosting
+		if (frames & 3) == 0 { // Full refresh every 4 updates to clear e-paper ghosting
 			sb3.WriteString("fast")
 		} else {
-			sb3.WriteString("partial") // Smooth refresh with no flicker
+			sb3.WriteString("partial") // Smooth refresh
 		}
 
 		err := exec.Command("show_img", sb.String(), sb2.String(), sb3.String()).Run()
