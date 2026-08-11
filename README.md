@@ -1,6 +1,6 @@
 -modifications-
 
-instead of polling, modified for mqtt support for quick updates
+instead of polling, modified for mqtt support for quick updates (tesserae)
 
 support for hdmi displays (pick hdmi in cli config when it asks)
 
