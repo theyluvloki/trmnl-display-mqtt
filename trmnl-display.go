@@ -142,6 +142,24 @@ func main() {
 	opts.AddBroker(config.BrokerURL)
 	opts.SetClientID(fmt.Sprintf("trmnl-display-%d", time.Now().UnixNano()))
 	opts.SetOrderMatters(false)
+	
+	// --- ADD THESE ROBUSTNESS SETTINGS ---
+	opts.SetAutoReconnect(true)
+	opts.SetConnectRetry(true)
+	opts.SetKeepAlive(30 * time.Second)
+	opts.SetPingTimeout(10 * time.Second)
+
+	opts.SetConnectionLostHandler(func(client mqtt.Client, err error) {
+		if options.Verbose {
+			fmt.Printf("⚠️ MQTT Connection lost: %v. Reconnecting...\n", err)
+		}
+	})
+
+	opts.SetOnConnectHandler(func(client mqtt.Client) {
+		if options.Verbose {
+			fmt.Println("✅ Connected/Reconnected to MQTT broker successfully.")
+		}
+	})
 
 	// Set credentials if provided
 	if config.Username != "" {
